@@ -1,0 +1,167 @@
+---
+title: "MBA Executivo em Business Analytics e Big Data"
+author: "Grupo 1"
+date: "Junho de 2019"
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
+geometry: left=2cm,right=2cm,top=1cm,bottom=1cm
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls());
+
+setwd("J:\\1.DATA_ANALYTICS\\17-Analise Preditiva Avancada\\TRABALHO");
+
+```
+
+## Modelagem Preditiva Avançada - Trabalho Final
+
+__A multinacional de varejo Waldata está querendo expandir a sua presença na américa latina e por isso decide firmar uma parceria com a FGV para desenvolver um modelo preditivo do valor de vendas. Além disso a companhia decide apostar em um segundo modelo de ‘target ads’ tornando mais efetiva as campanhas de marketing. Assim a rede varejista pretende melhorar suas projeções de fluxo de caixa e otimizar a distribuição de seus produtos por departamentos.__
+
+Exploração e limpeza dos dados:
+
+```{r message=FALSE, warning=FALSE}
+#Carregando as bibliotecas
+library(caret)
+library(mlbench)
+library(ggplot2)
+library(datasets)
+library(pROC)
+library(ROCR)
+library(h2o)
+library(DataExplorer)
+```
+
+__Passo 1) Importando os datasets RETAIL e MARKETING__
+
+```{r}
+#Importando os datasets
+
+dataRetail <- read.csv2("RETAIL_1.csv",dec = ".",header = TRUE);
+dataMkt <- read.csv2("Marketing.csv",dec = ".",header = TRUE);
+
+```
+
+__Passo 2) Exploração dos dados (análise de distribuições, valores faltantes, etc...).__
+
+__a) Base de Dados RETAIL__
+
+```{r}
+
+head(dataRetail)
+summary(dataRetail)
+
+#Transformando o campo DATE
+dataRetail$DATE <- as.Date(dataRetail$DATE,"%d/%m/%Y")
+
+#Foi retirada a coluna CPI (dados inconsistentes com a definição apresentada)
+dataRetail <- dataRetail[,-which(colnames(dataRetail)=="CPI")]
+
+```
+
+```{r}
+
+## Visualização de dados básicos
+introduce(dataRetail)
+## Plot basic description for airquality data
+plot_intro(dataRetail)
+## Visualização da distrin=buição dos dados faltantes
+plot_missing(dataRetail)
+## Distribuição de frequênca de todas as variáveis discretas
+plot_bar(dataRetail[,which(colnames(dataRetail)!="DATE")])
+## Histogramas de todas variáveis continuas
+plot_histogram(dataRetail)
+
+#Verifica-se que os dados faltantes estão concentrados nos campos relacionados aos descontos fornecidos para os produtos e pode-se sem perda de interpretação assumir com o valor 0 nestes registros.
+
+dataRetail[,which(startsWith(colnames(dataRetail),"MARKDOWN"))]<-apply(dataRetail[,which(startsWith(colnames(dataRetail),"MARKDOWN"))],1,function(x){replace(x, is.na(x), 0)});
+
+```
+
+```{r}
+#No caso da coluna "UNEMPLOYMENT", e sendo uma série temporal, iremos considerar a última taxa válida anterior ao dado faltante para cada loja.
+
+#Para isso utilizaremos uma função para nbormalização dos valores :
+
+na.lomf <- function(x) {
+
+    na.lomf.0 <- function(x) {
+        non.na.idx <- which(!is.na(x))
+        if (is.na(x[1L])) {
+            non.na.idx <- c(1L, non.na.idx)
+        }
+        rep.int(x[non.na.idx], diff(c(non.na.idx, length(x) + 1L)))
+    }
+
+    dim.len <- length(dim(x))
+
+    if (dim.len == 0L) {
+        na.lomf.0(x)
+    } else {
+        apply(x, dim.len, na.lomf.0)
+    }
+}
+
+dataRetail$UNEMPLOYMENT <- na.lomf(dataRetail$UNEMPLOYMENT)
+
+summary(dataRetail)
+
+## Visualização de dados básicos
+introduce(dataRetail)
+plot_intro(dataRetail)
+## Visualização da distrin=buição dos dados faltantes
+plot_missing(dataRetail)
+## Distribuição de frequênca de todas as variáveis discretas
+plot_bar(dataRetail)
+## Histogramas de todas variáveis continuas
+plot_histogram(dataRetail)
+
+
+```
+
+__b) Base de Dados MARKTING__
+
+```{r}
+
+summary(dataMkt)
+
+#Verifica-se que alguns valores númericos possuem o caracter "_" no lugar da pontuação decimal.
+#Executando as correções nestes campos
+dataMkt$CONS_CONF_IDX <- as.double(gsub(pattern = "_",replacement = ".",x = dataMkt$CONS_CONF_IDX))
+dataMkt$CONS_PRICE_IDX <- as.double(gsub(pattern = "_",replacement = ".",x = dataMkt$CONS_PRICE_IDX))
+dataMkt$EMP_VAR_RATE <- as.double(gsub(pattern = "_",replacement = ".",x = dataMkt$EMP_VAR_RATE))
+
+head(dataMkt)
+summary(dataMkt)
+
+## Visualização de dados básicos
+introduce(dataMkt)
+plot_intro(dataMkt)
+## Visualização da distrin=buição dos dados faltantes
+plot_missing(dataMkt)
+## Distribuição de frequênca de todas as variáveis discretas
+plot_bar(dataMkt)
+## Histogramas de todas variáveis continuas
+plot_histogram(dataMkt)
+
+
+```
+
+Após os procedimentos de entedimento e ajustes dos dados pode-se passar para a fase de modelagem.
+
+__Passo 3) Dividir as bases em 70% para treino e 30% para teste do modelo. (Utilize sempre seed(314))__
+
+
+4) Testar modelos de classificação para as campanhas de marketing: 
+      1) Regressão Logística, Árvores de Decisão, SVM , Redes Neurais e Algoritmo Genético para featureselection 
+      
+5) Testar modelos de regressão para o valor de vendas das lojas: 
+      1) Regressão Linear, Árvore de Decisão, e Redes Neurais 
+      
+6) Validar a performance dos modelos (R2   & Matriz de Confusão) 
+
+7) Fazer o “scoring” dos modelos para os dados nas respectivas bases de teste

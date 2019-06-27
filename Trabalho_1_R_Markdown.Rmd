@@ -1,0 +1,952 @@
+---
+title: "MBA Executivo em Business Analytics e Big Data"
+author: "Grupo 1"
+date: "Junho de 2019"
+output:
+  word_document: default
+  html_document:
+    df_print: paged
+  pdf_document: default
+  rmdformats::material:
+    gallery: yes
+    highlight: tango
+    lightbox: yes
+    self_contained: no
+    thumbnails: yes
+geometry: left=0.5cm,right=0.5cm,top=0.5cm,bottom=0.5cm
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls());
+
+setwd("J:\\1.DATA_ANALYTICS\\17-Analise Preditiva Avancada\\TRABALHO");
+
+```
+
+## Modelagem Preditiva Avançada - Trabalho Final
+
+__A multinacional de varejo Waldata está querendo expandir a sua presença na américa latina e por isso decide firmar uma parceria com a FGV para desenvolver um modelo preditivo do valor de vendas. Além disso a companhia decide apostar em um segundo modelo de ‘target ads’ tornando mais efetiva as campanhas de marketing. Assim a rede varejista pretende melhorar suas projeções de fluxo de caixa e otimizar a distribuição de seus produtos por departamentos.__
+
+
+Exploração e limpeza dos dados:
+
+
+```{r message=FALSE, warning=FALSE}
+#Carregando as bibliotecas
+library(caret)
+library(mlbench)
+library(ggplot2)
+library(datasets)
+library(pROC)
+library(ROCR)
+library(h2o)
+library(DataExplorer)
+library(grid)
+library(broom)
+library(tidyr)
+library(dplyr)
+library(scales)
+library(ggplot2)
+library(ggthemes)
+library(mlbench)
+library(foreach)
+library(doParallel)
+library(olsrr)
+library(lubridate)
+library(plotly)
+
+#No R podemos trabalhar com a computação em paralelo por meio de dois pacotes, a saber: foreach e doParallel.
+#Com isso aumentamos a velocidade de execução
+
+#Checa quantos núcleos existem
+ncl<-detectCores()
+
+#Registra os clusters a serem utilizados
+cl <- makeCluster(ncl-1)
+registerDoParallel(cl)
+
+```
+
+
+__Passo 1) Importando os datasets RETAIL e MARKETING__
+
+
+```{r}
+#Importando os datasets
+
+dataRetail <- read.csv2("RETAIL_1.csv",dec = ".",header = TRUE);
+dataMkt <- read.csv2("Marketing.csv",dec = ".",header = TRUE);
+
+```
+
+
+__Passo 2) Exploração dos dados (análise de distribuições, valores faltantes, etc...).__
+
+__a) Base de Dados RETAIL__
+
+
+```{r}
+
+#Transformando o campo DATE
+dataRetail$DATE <- as.Date(dataRetail$DATE,"%d/%m/%Y")
+
+#Transformando o valor de Store em fator
+dataRetail$STORE <- as.factor(dataRetail$STORE)
+
+head(dataRetail)
+summary(dataRetail)
+
+
+```
+
+
+Podemos visualizar algumas informações sobre a distribuição dos dados que podem indicar nexcessidade de ajustes nos mesmos:
+
+
+```{r}
+
+## Visualização de dados básicos
+introduce(dataRetail)
+plot_intro(dataRetail)
+## Visualização da distribuição dos dados faltantes
+plot_missing(dataRetail)
+## Distribuição de frequênca de todas as variáveis discretas
+plot_bar(dataRetail[,which(colnames(dataRetail)!="DATE")])
+## Histogramas de todas variáveis continuas
+plot_histogram(dataRetail)
+```
+
+
+Verifica-se que os dados faltantes estão concentrados nos campos relacionados aos descontos fornecidos para os produtos e pode-se sem perda de interpretação assumir com o valor 0 nestes registros.
+
+
+```{r}
+#Ajusta para o valor 0 todos os NS das colunas "MARKDOWN*"
+dataRetail[,which(startsWith(colnames(dataRetail),"MARKDOWN"))]<-apply(dataRetail[,which(startsWith(colnames(dataRetail),"MARKDOWN"))],1,function(x){replace(x, is.na(x), 0)});
+
+```
+
+
+A coluna "CPI" apresenta os dados com formatação errada e é necessário fazer uma normalização:
+
+
+```{r}
+#Executando as correções
+dataRetail$CPI <- substr(gsub(pattern = "[.]",replacement = "",x = dataRetail$CPI),1,5)
+dataRetail$CPI <- as.double(dataRetail$CPI)/1E2
+```
+
+
+No caso das colunas "UNEMPLOYMENT" e "CPI", e sendo uma série temporal, iremos considerar a última taxa válida anterior ao dado faltante para cada loja.
+
+Para isso utilizaremos uma função para normalização dos valores :
+
+
+```{r}
+na.lomf <- function(x) {
+
+    na.lomf.0 <- function(x) {
+        non.na.idx <- which(!is.na(x))
+        if (is.na(x[1L])) {
+            non.na.idx <- c(1L, non.na.idx)
+        }
+        rep.int(x[non.na.idx], diff(c(non.na.idx, length(x) + 1L)))
+    }
+
+    dim.len <- length(dim(x))
+
+    if (dim.len == 0L) {
+        na.lomf.0(x)
+    } else {
+        apply(x, dim.len, na.lomf.0)
+    }
+}
+
+dataRetail$UNEMPLOYMENT <- na.lomf(dataRetail$UNEMPLOYMENT)
+dataRetail$CPI <- na.lomf(dataRetail$CPI)
+
+summary(dataRetail)
+```
+
+
+Após os ajustes feitos podemos verificar novamente as informações dos dados da base:
+
+
+```{r}
+## Visualização de dados básicos
+introduce(dataRetail)
+plot_intro(dataRetail)
+## Visualização da distribuição dos dados faltantes
+plot_missing(dataRetail)
+## Distribuição de frequênca de todas as variáveis discretas
+plot_bar(dataRetail)
+## Histogramas de todas variáveis continuas
+plot_histogram(dataRetail)
+```
+
+
+Temos agora uma base com todas as informações completas:
+
+
+```{r}
+head(dataRetail)
+
+```
+
+__b) Base de Dados MARKETING__
+
+
+Verifica-se que alguns valores númericos possuem o caracter "_" no lugar da pontuação decimal:
+
+
+```{r}
+
+summary(dataMkt)
+
+#Executando as correções nestes campos
+dataMkt$CONS_CONF_IDX <- as.double(gsub(pattern = "_",replacement = ".",x = dataMkt$CONS_CONF_IDX))
+dataMkt$CONS_PRICE_IDX <- as.double(gsub(pattern = "_",replacement = ".",x = dataMkt$CONS_PRICE_IDX))
+dataMkt$EMP_VAR_RATE <- as.double(gsub(pattern = "_",replacement = ".",x = dataMkt$EMP_VAR_RATE))
+
+#Transformando o valor da campanha de Marketing em fator
+dataMkt$CAMPAIGN <- as.factor(dataMkt$CAMPAIGN)
+
+head(dataMkt)
+summary(dataMkt)
+```
+
+
+Podemos visualizar algumas informações sobre a distribuição dos dados que podem indicar nexcessidade de ajustes nos mesmos:
+
+
+```{r}
+
+## Visualização de dados básicos
+introduce(dataMkt)
+plot_intro(dataMkt)
+## Visualização da distrin=buição dos dados faltantes
+plot_missing(dataMkt)
+## Distribuição de frequênca de todas as variáveis discretas
+plot_bar(dataMkt)
+## Histogramas de todas variáveis continuas
+plot_histogram(dataMkt)
+```
+
+
+Podemos extrair algumas análises interessantes de forma a esclarecer o entedimento do problema.
+
+Por exemplo, verificar qual a contribuição de cada loja para o total de vendas:
+
+
+```{r}
+dataRetail %>% group_by(STORE) %>% summarize(Total_Vendas = sum(WEEKLY_SALES)) %>% 
+            arrange(desc(Total_Vendas)) %>% 
+            plot_ly(x = ~STORE, y = ~Total_Vendas) %>%
+            add_lines() %>%
+            add_trace(x = ~STORE, y = ~Total_Vendas, mode = 'markers',type = 'scatter') %>%
+            layout(title = "Vendas por Loja",
+                   xaxis = list(title = "Loja"), 
+                   yaxis = list(title = "Total de Vendas"),showlegend = FALSE)
+
+dataRetail %>% group_by(STORE) %>% summarize(Total_Vendas = sum(WEEKLY_SALES)) %>% 
+            arrange(desc(Total_Vendas)) %>% 
+            plot_ly(y = ~Total_Vendas,type = "box") %>%
+            layout(title = "Total de Vendas", 
+                   xaxis = list(title = "",showticklabels = FALSE), 
+                   yaxis = list(title = "Total de Vendas"),showlegend = FALSE)
+
+```
+
+
+Observa-se que a loja 29 obteve um volume de venda total bem mais elevado que as demais lojas e poderia ser tratado como um outlier dentro da base de informações.
+
+Outra análise interessante é o total de vendas por período:
+
+
+```{r}
+dataRetail %>% group_by(DATE) %>% summarize(Total_Vendas = sum(WEEKLY_SALES)) %>% 
+                arrange(desc(Total_Vendas)) %>% 
+                plot_ly(x = ~DATE, y = ~Total_Vendas) %>%
+                add_lines() %>%
+                add_trace(x = ~DATE, y = ~Total_Vendas, mode = 'markers',type = 'scatter') %>%
+                layout(title = "Vendas por Período",
+                   xaxis = list(title = ""), 
+                   yaxis = list(title = "Total de Vendas"),showlegend = FALSE)
+
+```
+
+
+Após os procedimentos de entedimento e ajustes dos dados pode-se passar para a fase de modelagem.
+
+
+__Passo 3) Dividir as bases em 70% para treino e 30% para teste do modelo. (Utilize sempre seed(314))__
+
+
+Dividimos a base de Vendas criando os grupos de treino e teste
+Para isso definimos "p=0.7", isto é 70% da base será escolhida aleatóriamente para treino e 30% para teste do modelo
+setando o seed para 314, para garantir que ao replicarmos essa partição em outro computador por exemplo, os mesmos dados irão respectivamente prar treino e teste.
+
+
+```{r}
+set.seed(314)
+trainIndex_Retail <- createDataPartition(dataRetail$WEEKLY_SALES, p = .7, list = FALSE)
+
+dfTrain_Retail <- dataRetail[trainIndex_Retail,]
+dfTest_Retail  <- dataRetail[-trainIndex_Retail,]
+
+#Dividimos a base de Marketing criando os grupos de treino e teste
+set.seed(314)
+trainIndex_Mkt <- createDataPartition(dataMkt$SUBSCRIBED, p = .7, list = FALSE)
+
+dfTrain_Mkt <- dataMkt[trainIndex_Mkt,]
+dfTest_Mkt  <- dataMkt[-trainIndex_Mkt,]
+
+```
+
+
+__Passo 4) Testar modelos de classificação para as campanhas de Marketing:__
+
+
+  a) Regressão Logística
+  
+
+```{r}
+set.seed(314)
+
+if (file.exists("modelMkt_GLM.rdata")) {
+  load("modelMkt_GLM.rdata")
+} else {
+  cv <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE,
+                  summaryFunction=twoClassSummary, classProbs = TRUE)
+  
+  modelMkt_GLM <- train(SUBSCRIBED ~ DURATION + EMP_VAR_RATE + CONTACT + PREVIOUS + CONS_PRICE_IDX + PDAYS + POUTCOME + DEFAULT +   EDUCATION + MARITAL_STATUS + CONS_CONF_IDX + DAY_OF_WEEK + AGE + MONTH + HOUSING + JOB, data = dfTrain_Mkt, method = "glm",
+                       metric="ROC",trControl = cv, control = list(maxit = 50))
+
+}
+
+modelMkt_GLM
+
+```
+
+
+Quando as colunas de uma matriz forem combinações lineares umas das outras, dizemos que a matriz é rank deficient (ou posto incompleto, em português). O problema é que matrizes assim não são invertíveis. Portanto, não dá para estimar os parâmetros da regressão.
+Possíveis causas:
+1) Uma das variáveis preditoras é combinação linear das demais. Ou seja, alguma variável no modelo é redundante.
+2) Talvez a amostra não seja grande o suficiente para o modelo a ser ajustado.
+3) O modelo pode ter parâmetros demais e tamanho amostral de menos.
+
+A regra geral é ter pelo menos uma quantidade de pontos igual ao número de parâmetros a serem ajustado no modelo. Assim se garante que a matriz não será rank-deficient.
+
+
+  Usando a base de teste para verificação do modelo:
+  
+  
+```{r}
+#Usando a base de teste para verificação do modelo
+dataMktPred <- predict(modelMkt_GLM, newdata=dfTest_Mkt)
+```
+
+
+  Gerando Matriz de Confusão:
+  
+  
+```{r}
+#Verificando o resultado através da Matriz de Confusão
+cmMkt_GLM <- confusionMatrix(data=dataMktPred, dfTest_Mkt$SUBSCRIBED)
+cmMkt_GLM
+```
+  
+  
+  Importância das Variáveis Preditoras:
+  
+  
+```{r}
+imp <- varImp(modelMkt_GLM, useModel=FALSE, scale=FALSE)
+imp
+plot(imp)
+```
+
+
+  Gerando a curva ROC:
+  
+
+```{r}
+dfProbs <- predict(modelMkt_GLM, newdata=dfTest_Mkt, type="prob")
+head(dfProbs)
+gbm.ROC <- roc(predictor=dfProbs$yes,
+               response=dfTest_Mkt$SUBSCRIBED,
+               levels=rev(levels(dfTest_Mkt$SUBSCRIBED)))
+
+gbm.ROC$auc
+plot(gbm.ROC,main="Curva ROC")
+
+```
+
+
+  Salvando o modelo:
+  
+
+```{r}
+save(modelMkt_GLM,file="modelMkt_GLM.rdata")
+```
+
+
+  b) Árvores de Decisão
+  
+
+  Modelo Random Forest:
+  
+
+```{r}
+# Definindo Parâmetros do Cross Validation
+set.seed(314)
+
+if (file.exists("modelMkt_RF.rdata")) {
+  load("modelMkt_RF.rdata")
+} else {
+  cv <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE, classProbs=TRUE)
+
+# Treinando o modelo
+  modelMkt_RF <- train(SUBSCRIBED~., data = dfTrain_Mkt, method = "rf",trControl = cv)
+}
+
+modelMkt_RF
+  
+```
+
+
+  Usando a base de teste para verificação do modelo:
+  
+
+```{r}
+pred_Mkt_rf <- predict(modelMkt_RF ,newdata=dfTest_Mkt)
+```
+
+
+  Gerando Matriz de Confusão:
+  
+  
+```{r}
+cmMkt_RF <- confusionMatrix(data=pred_Mkt_rf, dfTest_Mkt$SUBSCRIBED)
+cmMkt_RF
+           
+```
+
+
+  Importância das Variáveis Preditoras:
+  
+
+```{r}
+# 
+imp <- varImp(modelMkt_RF, useModel=FALSE, scale=FALSE)
+imp
+plot(imp)
+
+```
+
+
+  Salvando o modelo:
+  
+
+```{r}
+save(modelMkt_RF,file="modelMkt_RF.rdata")
+```
+
+
+  c) SVM (Support Vector Machines)
+  
+
+```{r}
+options(warn=-1)
+set.seed(314)
+
+if (file.exists("modelMkt_SVM.rdata")) {
+  load("modelMkt_SVM.rdata")
+} else {
+  cv <- trainControl(method = "repeatedcv", number = 10)
+
+  modelMkt_SVM <- train(SUBSCRIBED~., data = dfTrain_Mkt, method = "svmLinear", trControl = cv, preProcess = c("center", "scale"))
+}
+
+modelMkt_SVM
+
+```
+
+
+  Usando a base de teste para verificação do modelo:
+  
+
+```{r}
+dataMktPred <- predict(modelMkt_SVM, newdata=dfTest_Mkt)
+```
+
+
+  Gerando Matriz de Confusão:
+  
+
+```{r}
+cmMkt_SVM <- confusionMatrix(data=dataMktPred, dfTest_Mkt$SUBSCRIBED)
+cmMkt_SVM
+```
+
+
+  Importância das Variáveis Preditoras:
+  
+  
+```{r}
+imp <- varImp(modelMkt_SVM, useModel=FALSE, scale=FALSE)
+imp
+
+plot(imp)
+
+```
+
+
+  Salvando o modelo:
+  
+
+```{r}
+save(modelMkt_SVM,file="modelMkt_SVM.rdata")
+```
+
+
+  d) Redes Neurais
+  
+
+```{r}
+options(warn=-1)
+
+set.seed(314)
+
+if (file.exists("modelMkt_RN.rdata")) {
+  load("modelMkt_RN.rdata")
+} else {
+  modelMkt_RN <- train(SUBSCRIBED~., data = dfTrain_Mkt, method='nnet', trace = FALSE, preProc = c("center", "scale"))
+}
+
+modelMkt_RN
+```
+
+
+  Scorando o modelo base de teste:
+  
+
+```{r}
+
+#scorando o modelo base de teste
+dataMktPred <- predict(modelMkt_RN, newdata=dfTest_Mkt)
+```
+
+
+  Gerando Matriz de Confusão:
+  
+
+```{r}
+cmMkt_RN <- confusionMatrix(data=dataMktPred, dfTest_Mkt$SUBSCRIBED)
+cmMkt_RN
+```
+
+
+  Importância das Variáveis Preditoras:
+  
+  
+```{r}
+imp <- varImp(modelMkt_RN, useModel=FALSE, scale=FALSE)
+plot(imp)
+```
+
+
+  Salvando o modelo:
+  
+
+```{r}
+save(modelMkt_RN,file="modelMkt_RN.rdata")
+```
+
+__Passo 5) Testar modelos de regressão para o valor de vendas das lojas__
+
+
+  1) Regressão Linear
+  
+
+```{r}
+set.seed(314)
+
+if (file.exists("modelRetail_RL.rdata")) {
+  load("modelRetail_RL.rdata")
+} else {
+  
+  #Desconsiderando a váriável DATE (não considerando como uma série temporal)
+  modelRetail_RL <- lm(WEEKLY_SALES ~ . - DATE, data = dfTrain_Retail)
+  k <- ols_step_backward_aic(modelRetail_RL)
+  
+  #Retirando as variáveis indicadas 
+  modelRetail_RL <- train(WEEKLY_SALES ~ STORE + FUEL_PRICE + MARKDOWN1 + MARKDOWN2 + CPI, data = dfTrain_Retail, method = "lm")
+
+}
+
+modelRetail_RL
+
+
+```
+  
+  
+  Importância das Variáveis Preditoras:
+  
+  
+```{r}
+imp <- varImp(modelRetail_RL ,useModel=FALSE, scale=FALSE)
+imp
+plot(imp)
+```
+
+
+  Avaliando o modelo com a base de teste:
+  
+
+```{r}
+
+predict_Model <- predict(modelRetail_RL, dfTest_Retail)
+
+#Retornando as métricas do modelo com a base de teste
+metric_modelRetail_RL <- postResample(pred = predict_Model, obs = dfTest_Retail$WEEKLY_SALES)
+metric_modelRetail_RL
+
+dfTest_Retail$Model <- predict_Model
+
+head(dfTest_Retail)
+
+df_diag <- data.frame(actual = dfTest_Retail$WEEKLY_SALES, 
+                        fitted = dfTest_Retail$Model)
+
+df_diag %>% plot_ly(x = ~actual, y = ~fitted) %>%
+                add_trace(x = ~actual, y = ~fitted, mode = 'markers',type = 'scatter') %>%
+                add_trace(x = ~actual, y= ~actual , type="scatter", mode="lines", name='abline') %>%
+                layout(title = "",
+                   xaxis = list(title = "Valores Atuais"), 
+                   yaxis = list(title = "Predição"),showlegend = FALSE)
+
+```
+
+
+  Salvando o modelo:
+  
+
+```{r}
+save(modelRetail_RL,file="modelRetail_RL.rdata")
+```
+
+
+  2) Árvore de Decisão
+  
+
+  Modelo com Boosting (XgBoost):
+  
+
+```{r}
+set.seed(314)
+
+# Treinando o modelo
+if (file.exists("modelRetail_Boosting.rdata")) {
+  load("modelRetail_Boosting.rdata")
+} else {
+  cv <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+  modelRetail_Boosting <- train(WEEKLY_SALES~. , data = dfTrain_Retail, method = "xgbTree",trControl = cv)
+}
+
+modelRetail_Boosting
+```
+
+
+  Avaliando o modelo com a base de teste:
+  
+
+```{r}
+pred_boosting <- predict(modelRetail_Boosting ,newdata=dfTest_Retail)
+
+#Retornando as métricas do modelo com a base de teste
+metric_modelRetail_Boosting <- postResample(pred = pred_boosting, obs = dfTest_Retail$WEEKLY_SALES)
+metric_modelRetail_Boosting
+
+dfTest_Retail$Model <- pred_boosting
+
+head(dfTest_Retail)
+
+df_diag <- data.frame(actual = dfTest_Retail$WEEKLY_SALES, 
+                        fitted = dfTest_Retail$Model)
+
+df_diag %>% plot_ly(x = ~actual, y = ~fitted) %>%
+                add_trace(x = ~actual, y = ~fitted, mode = 'markers',type = 'scatter') %>%
+                add_trace(x = ~actual, y= ~actual , type="scatter", mode="lines", name='abline') %>%
+                layout(title = "",
+                   xaxis = list(title = "Valores Atuais"), 
+                   yaxis = list(title = "Predição"),showlegend = FALSE)
+
+```
+
+
+  Importância das Variáveis Preditoras:
+  
+  
+```{r}
+imp <- varImp(modelRetail_Boosting, useModel=FALSE, scale=FALSE)
+imp
+plot(imp)
+
+```
+  
+  
+  Salvando o modelo:
+  
+
+```{r}
+save(modelRetail_Boosting,file="modelRetail_Boosting.rdata")
+```
+
+
+  Modelo Random Forest:
+  
+  
+```{r}
+
+#Treinamento o modelo
+set.seed(314)
+
+if (file.exists("modelRetail_RF.rdata")) {
+  load("modelRetail_RF.rdata")
+} else {
+  modelRetail_RF <- train(WEEKLY_SALES~., data = dfTrain_Retail, method = "rf", trControl = cv)
+}
+
+modelRetail_RF
+```
+
+
+  Avaliando o modelo com a base de teste:
+  
+
+```{r}
+pred_RF <- predict(modelRetail_RF ,newdata=dfTest_Retail)
+
+#Retornando as métricas do modelo com a base de teste
+metric_modelRetail_RF <- postResample(pred = pred_RF, obs = dfTest_Retail$WEEKLY_SALES)
+metric_modelRetail_RF
+
+dfTest_Retail$Model <- pred_RF
+
+head(dfTest_Retail)
+
+df_diag <- data.frame(actual = dfTest_Retail$WEEKLY_SALES, 
+                        fitted = dfTest_Retail$Model)
+
+df_diag %>% plot_ly(x = ~actual, y = ~fitted) %>%
+                add_trace(x = ~actual, y = ~fitted, mode = 'markers',type = 'scatter') %>%
+                add_trace(x = ~actual, y= ~actual , type="scatter", mode="lines", name='abline') %>%
+                layout(title = "",
+                   xaxis = list(title = "Valores Atuais"), 
+                   yaxis = list(title = "Predição"),showlegend = FALSE)
+```
+
+
+  Importância das Variáveis Preditoras:
+  
+
+```{r}
+imp <- varImp(modelRetail_RF, useModel=FALSE, scale=FALSE)
+imp
+plot(imp)
+```
+
+
+  Salvando o modelo:
+  
+
+```{r}
+save(modelRetail_RF,file="modelRetail_RF.rdata")
+```
+
+
+  3) Redes Neurais
+  
+
+```{r}
+options(warn=-1)
+set.seed(314)
+
+if (file.exists("modelRetail_NNET.rdata")) {
+  load("modelRetail_NNET.rdata")
+} else {
+  # Definindo Parâmetros do Cross Validation
+  cv <- trainControl(method = "repeatedcv", number = 10, savePredictions = TRUE)
+  modelRetail_NNET <- train(WEEKLY_SALES~ ., data = dfTrain_Retail, method = "nnet",trControl = cv, maxit=1000, linout = 1)
+}
+
+modelRetail_NNET
+
+```
+
+
+  Importância das Variáveis Preditoras:
+  
+
+```{r}
+imp <- varImp(modelRetail_NNET, useModel=FALSE, scale=FALSE)
+imp
+plot(imp)
+```
+  
+  
+  Avaliando o modelo com a base de teste:
+  
+  
+```{r}
+pred_NNET <- predict(modelRetail_NNET ,newdata=dfTest_Retail)
+
+#Retornando as métricas do modelo com a base de teste
+metric_modelRetail_NNET <- postResample(pred = pred_NNET, obs = dfTest_Retail$WEEKLY_SALES)
+metric_modelRetail_NNET
+
+dfTest_Retail$Model <- pred_NNET
+
+head(dfTest_Retail)
+
+df_diag <- data.frame(actual = dfTest_Retail$WEEKLY_SALES, 
+                        fitted = dfTest_Retail$Model)
+
+df_diag %>% plot_ly(x = ~actual, y = ~fitted) %>%
+                add_trace(x = ~actual, y = ~fitted, mode = 'markers',type = 'scatter') %>%
+                add_trace(x = ~actual, y= ~actual , type="scatter", mode="lines", name='abline') %>%
+                layout(title = "",
+                   xaxis = list(title = "Valores Atuais"), 
+                   yaxis = list(title = "Predição"),showlegend = FALSE)
+
+```
+
+
+  Salvando o modelo:
+  
+
+```{r}
+save(modelRetail_NNET,file="modelRetail_NNET.rdata")
+```
+
+
+  Redes Neurais usando o pacote h2o:
+  
+
+```{r}
+library(h2o)
+h2o.init()
+  
+if (file.exists("modelRetail_H20.rdata")) {
+  load("modelRetail_H20.rdata")
+} else {
+  
+  y <- "WEEKLY_SALES"
+  x <- setdiff(names(dfTrain_Retail), y)
+  
+  #Criando uma grid de execução para varrer diversos modelos
+  hyper_params <- list(
+    activation=c("Rectifier","Tanh","Maxout","RectifierWithDropout","TanhWithDropout","MaxoutWithDropout"),
+    hidden=list(c(25,25,25,25),c(50,50,25,10),c(50,50,25,10,5),c(50,50,50,25,10)),
+    input_dropout_ratio=c(0,0.05,0.2),
+    l1=seq(0,1e-4,1e-6),
+    l2=seq(0,1e-4,1e-6)
+  )
+
+  #Definindo parâmetros e critérios de parada
+  search_criteria = list(strategy = "RandomDiscrete", max_models = 2000, seed=341,max_runtime_secs = 500, stopping_rounds=50, stopping_tolerance=1e-2)
+  dl_random_grid <- h2o.grid(
+    algorithm="deeplearning",
+    training_frame=as.h2o(dfTrain_Retail),
+    x=x, 
+    y=y,
+    epochs=1000,
+    nfolds = 10,
+    stopping_metric="AUTO",
+    stopping_tolerance=1e-2,
+    hyper_params = hyper_params,
+    search_criteria = search_criteria
+  )                                
+  grid <- h2o.getGrid(dl_random_grid@grid_id,sort_by="r2",decreasing=TRUE)
+  grid
+  
+  grid@summary_table[1,]
+  modelRetail_H20 <- h2o.getModel(grid@model_ids[[1]]) ## Modelo com o maior R2
+  
+}
+
+modelRetail_H20
+
+```
+
+
+  Avaliando o modelo:
+  
+
+```{r}
+h2o.r2(modelRetail_H20)
+
+dfTest_Retail <- dfTest_Retail[,which(colnames(dfTest_Retail)!="Model")]
+
+perf <- h2o.performance(modelRetail_H20,as.h2o(dfTest_Retail))
+h2o.hit_ratio_table(perf)
+
+#Retornando as métricas do modelo com a base de teste
+metric_modelRetail_H20 <- h2o.r2(perf)
+metric_modelRetail_H20
+
+head(h2o.varimp(modelRetail_H20))
+h2o.varimp_plot(modelRetail_H20)
+
+```
+
+
+  Salvando o modelo:
+
+
+```{r}
+save(modelRetail_H20,file="modelRetail_H20.rdata")
+```
+
+__Passo 6) Avaliação final da performance dos modelos__
+
+
+  1) Modelos da base de Marketing
+
+
+```{r}
+
+comparativo_Mkt <- data.frame(GLM=cmMkt_GLM$overall['Accuracy'],RANDOM_FOREST=cmMkt_RF$overall['Accuracy'],
+                              SVM=cmMkt_SVM$overall['Accuracy'],REDES_NEURAIS=cmMkt_RN$overall['Accuracy'])
+
+comparativo_Mkt
+
+```
+
+
+  2) Modelos da base de vendas
+  
+  
+```{r}
+
+comparativo_RT_Train <- data.frame(REGRESSAO_LOG=max(modelRetail_RL$results$Rsquared),TREE_BOOSTING=max(modelRetail_Boosting$results$Rsquared),RANDOM_FOREST=max(modelRetail_RF$results$Rsquared),REDES_NEURAIS_NNET=max(modelRetail_NNET$results$Rsquared),REDES_NEURAIS_H20=h2o.r2(modelRetail_H20))
+
+comparativo_RT_Test <- data.frame(REGRESSAO_LOG=metric_modelRetail_RL[2],TREE_BOOSTING=metric_modelRetail_Boosting[2],RANDOM_FOREST=metric_modelRetail_RF[2],REDES_NEURAIS_NNET=metric_modelRetail_NNET[2],REDES_NEURAIS_H20=metric_modelRetail_H20)
+
+comparativo_RT <- rbind("R2 TRAIN"=comparativo_RT_Train,"R2 TEST"=comparativo_RT_Test)
+
+comparativo_RT
+
+```
+
+
+__Passo 7) Conclusão__
+
+Para a base de Marketing verifica-se que o modelo que apresenta maior acurácia foi o GLM (Accuracy=0.912674),
+enquanto que para a base de vendas o modelo que apresentou a melhor perfomance na base de testes foi a Random Forest (R2=0.8950248).
+
+
+

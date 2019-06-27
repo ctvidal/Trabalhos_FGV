@@ -3,17 +3,17 @@ title: "MBA Executivo em Business Analytics e Big Data"
 author: "Grupo 1"
 date: "Junho de 2019"
 output:
-  word_document: default
+  pdf_document: default
   html_document:
     df_print: paged
-  pdf_document: default
+  word_document: default
   rmdformats::material:
     gallery: yes
     highlight: tango
     lightbox: yes
     self_contained: no
     thumbnails: yes
-geometry: left=0.5cm,right=0.5cm,top=0.5cm,bottom=0.5cm
+geometry: left=1.5cm,right=1.5cm,top=1.5cm,bottom=1.5cm
 ---
 
 ```{r setup, include=FALSE}

@@ -3,16 +3,16 @@ title: "MBA Executivo em Business Analytics e Big Data"
 author: "Grupo 1"
 date: "Junho de 2019"
 output:
-  pdf_document: default
+  word_document: default
   html_document:
     df_print: paged
-  word_document: default
   rmdformats::material:
     gallery: yes
     highlight: tango
     lightbox: yes
     self_contained: no
     thumbnails: yes
+  pdf_document: default
 geometry: left=1.5cm,right=1.5cm,top=1.5cm,bottom=1.5cm
 ---
 
@@ -237,6 +237,10 @@ plot_histogram(dataMkt)
 
 Podemos extrair algumas análises interessantes de forma a esclarecer o entedimento do problema.
 
+IMPORTANTE: Vê-se claramente que nossa base de dados está desbalanceada considerando a variável alvo como sendo a coluna "SUBSCRIBED". Logo a medida de comparação entre os modelos não deverá ser a acurácia.
+
+Utilizaremos o valor da AUC da curva ROC para verificação de qual modelo atenderia melhor o problema no caso da base de Marketing.
+
 Por exemplo, verificar qual a contribuição de cada loja para o total de vendas:
 
 
@@ -375,12 +379,12 @@ plot(imp)
 ```{r}
 dfProbs <- predict(modelMkt_GLM, newdata=dfTest_Mkt, type="prob")
 head(dfProbs)
-gbm.ROC <- roc(predictor=dfProbs$yes,
+modelMkt_GLM.ROC <- roc(predictor=dfProbs$no,
                response=dfTest_Mkt$SUBSCRIBED,
                levels=rev(levels(dfTest_Mkt$SUBSCRIBED)))
 
-gbm.ROC$auc
-plot(gbm.ROC,main="Curva ROC")
+modelMkt_GLM.ROC$auc
+plot(modelMkt_GLM.ROC,main="Curva ROC")
 
 ```
 
@@ -447,6 +451,21 @@ plot(imp)
 ```
 
 
+  Gerando a curva ROC:
+  
+
+```{r}
+dfProbs <- predict(modelMkt_RF, newdata=dfTest_Mkt, type="prob")
+head(dfProbs)
+modelMkt_RF.ROC <- roc(predictor=dfProbs$no,
+               response=dfTest_Mkt$SUBSCRIBED,
+               levels=rev(levels(dfTest_Mkt$SUBSCRIBED)))
+
+modelMkt_RF.ROC$auc
+plot(modelMkt_RF.ROC,main="Curva ROC")
+
+```
+
   Salvando o modelo:
   
 
@@ -504,6 +523,22 @@ plot(imp)
 ```
 
 
+  Gerando a curva ROC:
+  
+
+```{r}
+head(dataMktPred)
+
+dfProbs <- ifelse(dataMktPred=="no",1,0)
+dfTest <- ifelse(dfTest_Mkt$SUBSCRIBED=="no",1,0)
+
+modelMkt_SVM.ROC <- roc(dfTest,dfProbs)
+
+modelMkt_SVM.ROC$auc
+plot(modelMkt_SVM.ROC,main="Curva ROC")
+
+```
+
   Salvando o modelo:
   
 
@@ -557,6 +592,21 @@ imp <- varImp(modelMkt_RN, useModel=FALSE, scale=FALSE)
 plot(imp)
 ```
 
+
+  Gerando a curva ROC:
+  
+
+```{r}
+dfProbs <- predict(modelMkt_RN, newdata=dfTest_Mkt, type="prob")
+head(dfProbs)
+modelMkt_RN.ROC <- roc(predictor=dfProbs$yes,
+               response=dfTest_Mkt$SUBSCRIBED,
+               levels=rev(levels(dfTest_Mkt$SUBSCRIBED)))
+
+modelMkt_RN.ROC$auc
+plot(modelMkt_RN.ROC,main="Curva ROC")
+
+```
 
   Salvando o modelo:
   
@@ -919,10 +969,17 @@ __Passo 6) Avaliação final da performance dos modelos__
 
 ```{r}
 
-comparativo_Mkt <- data.frame(GLM=cmMkt_GLM$overall['Accuracy'],RANDOM_FOREST=cmMkt_RF$overall['Accuracy'],
+comparativo_Mkt_Acuracia <- data.frame(GLM=cmMkt_GLM$overall['Accuracy'],RANDOM_FOREST=cmMkt_RF$overall['Accuracy'],
                               SVM=cmMkt_SVM$overall['Accuracy'],REDES_NEURAIS=cmMkt_RN$overall['Accuracy'])
 
+
+comparativo_Mkt_AUC <- data.frame(GLM=modelMkt_GLM.ROC$auc,RANDOM_FOREST=modelMkt_RF.ROC$auc,
+                              SVM=modelMkt_SVM.ROC$auc,REDES_NEURAIS=modelMkt_RN.ROC$auc)
+
+comparativo_Mkt <- rbind("ACCURACY"=comparativo_Mkt_Acuracia,"AUC"=comparativo_Mkt_AUC)
+
 comparativo_Mkt
+
 
 ```
 
@@ -945,8 +1002,12 @@ comparativo_RT
 
 __Passo 7) Conclusão__
 
-Para a base de Marketing verifica-se que o modelo que apresenta maior acurácia foi o GLM (Accuracy=0.912674),
-enquanto que para a base de vendas o modelo que apresentou a melhor perfomance na base de testes foi a Random Forest (R2=0.8950248).
+Para a base de Marketing verifica-se que o modelo que apresenta maior AUC foi o Random Forest (AUC=0.9396309).
+Para a base de vendas o modelo que apresentou a melhor perfomance na base de testes foi também a Random Forest (R2=0.8950248).
+
+
+
+
 
 
 
